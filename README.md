@@ -10,6 +10,7 @@
 - 检测 NVIDIA 驱动与 CUDA Toolkit
 - 使用 `GGML_CUDA=ON` 从官方源码编译 `llama-server`
 - 扫描指定目录并交互式选择本地 GGUF 模型
+- 默认从执行 `sudo` 的用户目录 `~/models` 扫描模型
 - 显示模型相对路径及文件大小
 - 自定义监听地址、端口、上下文、GPU 层数、线程和并发数
 - 支持附加任意 `llama-server` 参数
@@ -85,7 +86,9 @@ sudo ./install.sh --action uninstall
 
 ## 模型选择
 
-安装或重新配置时，先输入 GGUF 模型目录。脚本会递归扫描该目录三层，并生成选择菜单：
+安装或重新配置时，模型目录默认为 `~/models`。脚本以 `sudo` 运行时，`~` 会解析为发起执行的普通用户主目录，而不是 `/root`；例如用户 `anna` 执行 `sudo ./install.sh` 时，默认目录为 `/home/anna/models`。
+
+你也可以输入其他目录。脚本会递归扫描该目录三层，并生成选择菜单：
 
 ```text
 1  Qwen/Qwen3-8B-Q4_K_M.gguf · 5.0 GiB
