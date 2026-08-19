@@ -5,6 +5,7 @@ set -Eeuo pipefail
 # 支持：Debian / Ubuntu / Arch Linux、local GGUF、systemd、更新与回滚
 
 readonly APP_NAME="llama.cpp CUDA 部署"
+readonly UI_BACKTITLE="llamacpp-install · NVIDIA CUDA · Local GGUF · systemd"
 readonly SOURCE_URL="https://github.com/ggml-org/llama.cpp.git"
 readonly INSTALL_ROOT="/opt/llama.cpp"
 readonly RELEASES_DIR="$INSTALL_ROOT/releases"
@@ -16,6 +17,14 @@ readonly SERVICE_FILE="/etc/systemd/system/llama-server.service"
 readonly SERVICE_NAME="llama-server"
 readonly DEFAULT_MODEL_DIR="/var/lib/llama.cpp/models"
 readonly UI_WIDTH=68
+
+C_RESET=""
+C_BOLD=""
+C_DIM=""
+C_CYAN=""
+C_GREEN=""
+C_YELLOW=""
+C_RED=""
 
 UI_MODE="auto"
 REQUESTED_ACTION=""
@@ -39,16 +48,16 @@ PARSED_WORDS=()
 NVCC_PATH=""
 
 die() {
-    printf '错误：%s\n' "$*" >&2
+    printf '%b错误%b  %s\n' "$C_RED$C_BOLD" "$C_RESET" "$*" >&2
     exit 1
 }
 
 info() {
-    printf '[+] %s\n' "$*"
+    printf '%b●%b %s\n' "$C_GREEN" "$C_RESET" "$*"
 }
 
 warn() {
-    printf '[!] %s\n' "$*" >&2
+    printf '%b▲%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2
 }
 
 command_exists() {
@@ -56,15 +65,16 @@ command_exists() {
 }
 
 run() {
-    printf '  $'
+    printf '%b  $' "$C_DIM"
     printf ' %q' "$@"
-    printf '\n'
+    printf '%b\n' "$C_RESET"
     "$@"
 }
 
 on_error() {
     local line="$1" status="$2"
-    printf '\n[失败] 第 %s 行，退出码 %s。\n' "$line" "$status" >&2
+    printf '\n%b执行失败%b  第 %s 行，退出码 %s。\n' \
+        "$C_RED$C_BOLD" "$C_RESET" "$line" "$status" >&2
 }
 
 usage() {
@@ -73,7 +83,7 @@ llama.cpp CUDA 单文件部署脚本
 
 用法：
   sudo ./install.sh
-  sudo ./install.sh --action install|configure|update|rollback|status|uninstall
+  sudo ./install.sh --action install|configure|update|rollback|service|status|uninstall
 
 选项：
   --action ACTION  直接选择操作
@@ -124,6 +134,33 @@ ui_init() {
         text) ;;
         *) die "不支持的 UI 模式：$UI_MODE" ;;
     esac
+
+    if [[ "$UI_MODE" == "text" && -t 2 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+        C_RESET=$'\033[0m'
+        C_BOLD=$'\033[1m'
+        C_DIM=$'\033[2m'
+        C_CYAN=$'\033[36m'
+        C_GREEN=$'\033[32m'
+        C_YELLOW=$'\033[33m'
+        C_RED=$'\033[31m'
+    fi
+}
+
+ui_banner() {
+    [[ "$UI_MODE" == "text" ]] || return 0
+    printf '%b╭─ %b%bllamacpp-install%b\n' \
+        "$C_CYAN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+    printf '%b│%b NVIDIA CUDA · Local GGUF · systemd\n' "$C_CYAN" "$C_RESET" >&2
+    printf '%b╰─%b\n' "$C_CYAN" "$C_RESET" >&2
+}
+
+ui_text_frame() {
+    local title="$1" content="$2" line
+    printf '%b╭─ %b%b%s%b\n' "$C_CYAN" "$C_RESET" "$C_BOLD" "$title" "$C_RESET"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        printf '%b│%b %s\n' "$C_CYAN" "$C_RESET" "$line"
+    done <<< "$content"
+    printf '%b╰─%b\n' "$C_CYAN" "$C_RESET"
 }
 
 ui_height() {
@@ -144,34 +181,67 @@ ui_message() {
     height="$(ui_height "$message")"
     case "$UI_MODE" in
         whiptail)
-            whiptail --title "$APP_NAME" --ok-button "确定" \
+            whiptail --backtitle "$UI_BACKTITLE" --title " 提示 " --ok-button "确定" \
                 --msgbox "$message" "$height" "$UI_WIDTH"
             ;;
         dialog)
-            dialog --title "$APP_NAME" --ok-label "确定" \
+            dialog --backtitle "$UI_BACKTITLE" --title " 提示 " --ok-label "确定" \
                 --msgbox "$message" "$height" "$UI_WIDTH"
             ;;
         text)
-            printf '┌─ %s\n%s\n└─\n' "$APP_NAME" "$message"
+            ui_text_frame "$APP_NAME" "$message"
+            ;;
+    esac
+}
+
+ui_textbox() {
+    local title="$1" content="$2" temp_file status=0
+    case "$UI_MODE" in
+        whiptail)
+            temp_file="$(mktemp)"
+            printf '%s\n' "$content" > "$temp_file"
+            whiptail --backtitle "$UI_BACKTITLE" --title " $title " --scrolltext \
+                --textbox "$temp_file" 22 78 || status=$?
+            rm -f -- "$temp_file"
+            return "$status"
+            ;;
+        dialog)
+            temp_file="$(mktemp)"
+            printf '%s\n' "$content" > "$temp_file"
+            dialog --backtitle "$UI_BACKTITLE" --title " $title " \
+                --textbox "$temp_file" 22 78 || status=$?
+            rm -f -- "$temp_file"
+            return "$status"
+            ;;
+        text)
+            ui_text_frame "$title" "$content"
             ;;
     esac
 }
 
 ui_confirm() {
-    local prompt="${1//\\n/$'\n'}" height answer
+    local prompt="${1//\\n/$'\n'}" height answer line
     height="$(ui_height "$prompt" 5 7 16)"
     case "$UI_MODE" in
         whiptail)
-            whiptail --title "确认 · $APP_NAME" --yes-button "继续" --no-button "返回" \
+            whiptail --backtitle "$UI_BACKTITLE" --title " 请确认 " \
+                --yes-button "继续" --no-button "返回" \
                 --yesno "$prompt" "$height" "$UI_WIDTH"
             ;;
         dialog)
-            dialog --title "确认 · $APP_NAME" --yes-label "继续" --no-label "返回" \
+            dialog --backtitle "$UI_BACKTITLE" --title " 请确认 " \
+                --yes-label "继续" --no-label "返回" \
                 --yesno "$prompt" "$height" "$UI_WIDTH"
             ;;
         text)
-            printf '┌─ 确认\n%s\n' "$prompt" >&2
-            read -r -p "└─ 继续？[y/N] › " answer
+            printf '%b╭─ %b%b请确认%b\n' "$C_CYAN" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                printf '%b│%b %s\n' "$C_CYAN" "$C_RESET" "$line" >&2
+            done <<< "$prompt"
+            printf '%b╰─%b 继续？%b[y/N]%b › ' \
+                "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET" >&2
+            read -r answer
+            answer="${answer%$'\r'}"
             [[ "$answer" =~ ^[Yy]$ ]]
             ;;
     esac
@@ -181,15 +251,20 @@ ui_input() {
     local prompt="$1" default_value="${2:-}" result
     case "$UI_MODE" in
         whiptail)
-            whiptail --title "$APP_NAME" --ok-button "确认" --cancel-button "取消" \
+            whiptail --backtitle "$UI_BACKTITLE" --title " 参数设置 " \
+                --ok-button "确认" --cancel-button "取消" \
                 --inputbox "$prompt" 8 "$UI_WIDTH" "$default_value" 3>&1 1>&2 2>&3
             ;;
         dialog)
-            dialog --stdout --title "$APP_NAME" --ok-label "确认" --cancel-label "取消" \
+            dialog --stdout --backtitle "$UI_BACKTITLE" --title " 参数设置 " \
+                --ok-label "确认" --cancel-label "取消" \
                 --inputbox "$prompt" 8 "$UI_WIDTH" "$default_value"
             ;;
         text)
-            read -r -p "› $prompt [$default_value]：" result
+            printf '%b›%b %s %b[%s]%b：' \
+                "$C_CYAN$C_BOLD" "$C_RESET" "$prompt" "$C_DIM" "$default_value" "$C_RESET" >&2
+            read -r result
+            result="${result%$'\r'}"
             printf '%s\n' "${result:-$default_value}"
             ;;
     esac
@@ -208,24 +283,37 @@ ui_menu() {
 
     case "$UI_MODE" in
         whiptail)
-            whiptail --title "$APP_NAME" --ok-button "选择" --cancel-button "退出" \
+            whiptail --backtitle "$UI_BACKTITLE" --title " $APP_NAME " \
+                --ok-button "选择" --cancel-button "返回" \
                 --notags --default-item "$default_tag" \
                 --menu "$prompt" "$height" "$UI_WIDTH" "$list_height" \
                 "${items[@]}" 3>&1 1>&2 2>&3
             ;;
         dialog)
-            dialog --stdout --title "$APP_NAME" --ok-label "选择" --cancel-label "退出" \
+            dialog --stdout --backtitle "$UI_BACKTITLE" --title " $APP_NAME " \
+                --ok-label "选择" --cancel-label "返回" \
                 --no-tags --default-item "$default_tag" \
                 --menu "$prompt" "$height" "$UI_WIDTH" "$list_height" "${items[@]}"
             ;;
         text)
-            printf '┌─ %s · %s\n' "$APP_NAME" "$prompt" >&2
+            printf '%b╭─ %b%b%s%b  %b%s%b\n' \
+                "$C_CYAN" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" \
+                "$C_DIM" "$prompt" "$C_RESET" >&2
             for ((i = 0; i < ${#items[@]}; i += 2)); do
                 [[ "${items[i]}" == "$default_tag" ]] && default_index="$index"
-                printf '│ %d  %s\n' "$index" "${items[i + 1]}" >&2
+                if [[ "${items[i]}" == "$default_tag" ]]; then
+                    printf '%b│%b %b%2d%b  %s\n' "$C_CYAN" "$C_RESET" \
+                        "$C_CYAN$C_BOLD" "$index" "$C_RESET" "${items[i + 1]}" >&2
+                else
+                    printf '%b│%b %2d  %s\n' "$C_CYAN" "$C_RESET" \
+                        "$index" "${items[i + 1]}" >&2
+                fi
                 ((index += 1))
             done
-            read -r -p "└─ 选择 [默认 $default_index] › " answer
+            printf '%b╰─%b 选择 %b[默认 %d]%b › ' \
+                "$C_CYAN" "$C_RESET" "$C_DIM" "$default_index" "$C_RESET" >&2
+            read -r answer
+            answer="${answer%$'\r'}"
             if [[ -z "$answer" ]]; then
                 printf '%s\n' "$default_tag"
             elif [[ "$answer" =~ ^[0-9]+$ ]] && ((answer >= 1 && answer <= count)); then
@@ -776,14 +864,91 @@ action_rollback() {
 action_status() {
     require_root
     detect_platform
+    local service_status current_build
     if [[ -r "$STATE_FILE" ]]; then
         load_state
-        ui_message "$(config_summary)\n当前构建 │ $(basename "$(readlink -f "$CURRENT_LINK")")"
+        current_build="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+        current_build="${current_build##*/}"
     else
         ui_message "尚未安装 llama.cpp Server"
         return
     fi
-    systemctl status "$SERVICE_NAME" --no-pager || true
+    service_status="$(SYSTEMD_COLORS=0 systemctl status "$SERVICE_NAME" \
+        --no-pager --full 2>&1 || true)"
+    ui_textbox "服务状态 · $SERVICE_NAME" \
+        "$(config_summary)
+当前构建 │ ${current_build:-未知}
+
+$service_status" || true
+}
+
+service_start() {
+    load_state
+    run systemctl start "$SERVICE_NAME"
+    if health_check; then
+        ui_message "服务已启动\nhttp://$SERVER_HOST:$SERVER_PORT"
+    else
+        ui_message "服务已启动，但健康检查未通过。\n请查看服务状态或日志。"
+    fi
+}
+
+service_stop() {
+    load_state
+    run systemctl stop "$SERVICE_NAME"
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        die "服务仍处于运行状态"
+    fi
+    ui_message "服务已停止"
+}
+
+service_restart() {
+    load_state
+    run systemctl restart "$SERVICE_NAME"
+    if health_check; then
+        ui_message "服务已重启\nhttp://$SERVER_HOST:$SERVER_PORT"
+    else
+        ui_message "服务已重启，但健康检查未通过。\n请查看服务状态或日志。"
+    fi
+}
+
+service_logs() {
+    local logs
+    logs="$(SYSTEMD_COLORS=0 journalctl -u "$SERVICE_NAME" -n 200 \
+        --no-pager -o short-iso-precise 2>&1 || true)"
+    [[ -n "$logs" ]] || logs="暂无日志"
+    ui_textbox "最近日志 · $SERVICE_NAME" "$logs" || true
+}
+
+action_service_menu() {
+    require_root
+    detect_platform
+    if [[ ! -r "$STATE_FILE" || ! -f "$SERVICE_FILE" ]]; then
+        ui_message "尚未安装 llama.cpp Server"
+        return
+    fi
+
+    local choice
+    while true; do
+        choice="$(ui_menu "服务状态 / 管理" status \
+            status "服务状态        · 配置与 systemd 详情" \
+            start "启动服务        · 启动并执行健康检查" \
+            stop "停止服务        · 停止 llama-server" \
+            restart "重启服务        · 重载当前模型和参数" \
+            logs "运行日志        · 最近 200 行日志" \
+            configure "模型与运行参数  · 选择 GGUF、自定义参数" \
+            back "返回主菜单")" || return
+
+        case "$choice" in
+            status) action_status ;;
+            start) service_start ;;
+            stop) service_stop ;;
+            restart) service_restart ;;
+            logs) service_logs ;;
+            configure) action_configure ;;
+            back) return ;;
+            *) die "未知服务操作：$choice" ;;
+        esac
+    done
 }
 
 action_uninstall() {
@@ -822,13 +987,28 @@ select_action() {
         return
     fi
     ui_menu "选择操作" install \
-        install "安装 / 重新部署" \
-        configure "选择模型 / 修改运行参数" \
-        update "更新 llama.cpp" \
-        rollback "回滚上一版本" \
-        status "查看服务状态" \
-        uninstall "卸载（保留模型）" \
+        install "安装 / 重新部署  · CUDA 源码编译" \
+        configure "模型与运行参数   · 选择 GGUF、自定义参数" \
+        update "更新 llama.cpp    · 编译并保留上一版" \
+        rollback "回滚上一版本     · 恢复 previous 构建" \
+        service "服务状态 / 管理   · 启停、日志与配置" \
+        uninstall "卸载             · 保留本地模型" \
         quit "退出"
+}
+
+dispatch_action() {
+    local action="$1"
+    case "$action" in
+        install) action_install ;;
+        configure) action_configure ;;
+        update) action_update ;;
+        rollback) action_rollback ;;
+        service) action_service_menu ;;
+        status) action_status ;;
+        uninstall) action_uninstall ;;
+        quit) exit 0 ;;
+        *) die "未知操作：$action" ;;
+    esac
 }
 
 main() {
@@ -841,17 +1021,16 @@ main() {
     ui_init
     trap 'on_error "$LINENO" "$?"' ERR
     local action
-    action="$(select_action)" || exit 0
-    case "$action" in
-        install) action_install ;;
-        configure) action_configure ;;
-        update) action_update ;;
-        rollback) action_rollback ;;
-        status) action_status ;;
-        uninstall) action_uninstall ;;
-        quit) exit 0 ;;
-        *) die "未知操作：$action" ;;
-    esac
+    if [[ -n "$REQUESTED_ACTION" ]]; then
+        dispatch_action "$REQUESTED_ACTION"
+        return
+    fi
+
+    ui_banner
+    while true; do
+        action="$(select_action)" || exit 0
+        dispatch_action "$action"
+    done
 }
 
 main "$@"

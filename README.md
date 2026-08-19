@@ -14,8 +14,10 @@
 - 自定义监听地址、端口、上下文、GPU 层数、线程和并发数
 - 支持附加任意 `llama-server` 参数
 - 自动选择 `whiptail`、`dialog` 或紧凑纯文本界面
+- 统一的紧凑界面：顶栏、操作说明、默认项高亮和清晰的确认提示
 - 安装为单一 systemd 服务
-- 支持重新选择模型、修改参数、更新、回滚、查看状态和卸载
+- 支持重新选择模型、修改参数、更新、回滚和卸载
+- 提供服务管理子菜单：状态、启动、停止、重启、日志和自定义配置
 - 更新时只保留当前版本和上一版本
 - 卸载时不会删除 GGUF 模型
 
@@ -38,13 +40,18 @@ sudo ./install.sh
 主菜单：
 
 ```text
-1  安装 / 重新部署
-2  选择模型 / 修改运行参数
-3  更新 llama.cpp
-4  回滚上一版本
-5  查看服务状态
-6  卸载（保留模型）
+╭─ llama.cpp CUDA 部署  选择操作
+│  1  安装 / 重新部署  · CUDA 源码编译
+│  2  模型与运行参数   · 选择 GGUF、自定义参数
+│  3  更新 llama.cpp    · 编译并保留上一版
+│  4  回滚上一版本     · 恢复 previous 构建
+│  5  服务状态 / 管理   · 启停、日志与配置
+│  6  卸载             · 保留本地模型
+│  7  退出
+╰─ 选择 [默认 1] ›
 ```
+
+纯文本模式在交互式终端中使用颜色；设置 `NO_COLOR=1` 可关闭颜色。`whiptail` 和 `dialog` 模式使用统一顶栏、紧凑窗口及一致的中文按钮。
 
 也可以直接指定操作：
 
@@ -53,9 +60,28 @@ sudo ./install.sh --action install
 sudo ./install.sh --action configure
 sudo ./install.sh --action update
 sudo ./install.sh --action rollback
+sudo ./install.sh --action service
 sudo ./install.sh --action status
 sudo ./install.sh --action uninstall
 ```
+
+## 服务状态与管理
+
+在主菜单选择“服务状态 / 管理”后，可以执行：
+
+```text
+1  查看服务状态
+2  启动服务
+3  停止服务
+4  重启服务
+5  查看最近 200 行日志
+6  选择模型 / 自定义运行参数
+7  返回主菜单
+```
+
+状态和日志在 `whiptail` 或 `dialog` 中使用可滚动文本框显示。纯文本模式会直接输出到终端。
+
+`--action service` 打开服务管理子菜单；`--action status` 仍可直接显示服务状态。
 
 ## 模型选择
 
