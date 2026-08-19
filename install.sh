@@ -4,6 +4,24 @@ set -Eeuo pipefail
 # llama.cpp CUDA 单文件部署脚本
 # 支持：Debian / Ubuntu / Arch Linux、local GGUF、systemd、更新与回滚
 
+resolve_invoking_home() {
+    local invoking_user="${SUDO_USER:-${USER:-root}}" passwd_record="" user_home=""
+    if command -v getent >/dev/null 2>&1; then
+        passwd_record="$(getent passwd "$invoking_user" 2>/dev/null || true)"
+        if [[ -n "$passwd_record" ]]; then
+            IFS=':' read -r _ _ _ _ _ user_home _ <<< "$passwd_record"
+        fi
+    fi
+    if [[ -z "$user_home" ]]; then
+        if [[ "$invoking_user" != "root" ]]; then
+            user_home="/home/$invoking_user"
+        else
+            user_home="${HOME:-/root}"
+        fi
+    fi
+    printf '%s\n' "${user_home%/}"
+}
+
 readonly APP_NAME="llama.cpp CUDA 部署"
 readonly UI_BACKTITLE="llamacpp-install · NVIDIA CUDA · Local GGUF · systemd"
 readonly SOURCE_URL="https://github.com/ggml-org/llama.cpp.git"
@@ -15,7 +33,8 @@ readonly CONFIG_DIR="/etc/llama.cpp"
 readonly STATE_FILE="$CONFIG_DIR/install.conf"
 readonly SERVICE_FILE="/etc/systemd/system/llama-server.service"
 readonly SERVICE_NAME="llama-server"
-readonly DEFAULT_MODEL_DIR="/var/lib/llama.cpp/models"
+readonly INVOKING_HOME="$(resolve_invoking_home)"
+readonly DEFAULT_MODEL_DIR="$INVOKING_HOME/models"
 readonly UI_WIDTH=68
 
 C_RESET=""
@@ -426,8 +445,19 @@ human_size() {
     fi
 }
 
+expand_invoking_tilde() {
+    local path="$1"
+    case "$path" in
+        '~') printf '%s\n' "$INVOKING_HOME" ;;
+        '~/'*) printf '%s/%s\n' "$INVOKING_HOME" "${path#\~/}" ;;
+        *) printf '%s\n' "$path" ;;
+    esac
+}
+
 select_model() {
-    MODEL_DIR="$(ui_input "GGUF 模型目录" "$MODEL_DIR")" || die "已取消"
+    local input
+    input="$(ui_input "GGUF 模型目录" "$MODEL_DIR")" || die "已取消"
+    MODEL_DIR="$(expand_invoking_tilde "$input")"
     local -a models=() menu_items=()
     local file display choice i default_choice="manual" manual_default
 
@@ -451,7 +481,8 @@ select_model() {
         "$default_choice" "${menu_items[@]}")" || die "已取消模型选择"
     if [[ "$choice" == "manual" ]]; then
         manual_default="${MODEL_PATH:-$MODEL_DIR/model.gguf}"
-        MODEL_PATH="$(ui_input "GGUF 文件绝对路径" "$manual_default")" || die "已取消"
+        input="$(ui_input "GGUF 文件绝对路径" "$manual_default")" || die "已取消"
+        MODEL_PATH="$(expand_invoking_tilde "$input")"
     else
         MODEL_PATH="${models[choice]}"
     fi
@@ -963,7 +994,7 @@ action_uninstall() {
 }
 
 self_test() {
-    local quoted
+    local quoted expanded
     parse_words "--flash-attn on --alias 'my model' --no-webui"
     [[ "${#PARSED_WORDS[@]}" -eq 5 ]]
     [[ "${PARSED_WORDS[3]}" == "my model" ]]
@@ -978,6 +1009,8 @@ self_test() {
     PARALLEL=1
     PARSED_WORDS=(--flash-attn on)
     validate_extra_args
+    expanded="$(expand_invoking_tilde '~/models/test.gguf')"
+    [[ "$expanded" == "$INVOKING_HOME/models/test.gguf" ]]
     printf 'self-test: PASS\n'
 }
 
